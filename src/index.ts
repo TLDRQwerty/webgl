@@ -4,32 +4,30 @@ import vsSource from './shaders/shader.vert';
 //@ts-ignore
 import fsSource from './shaders/shader.frag';
 
-interface ProgramInfo { 
+interface ProgramInfo {
 	program: WebGLProgram,
-	attribLocations: {
-		vertexPosition: number,
-	},
-	uniformLocations: {
-		projectionMatrix: WebGLUniformLocation | null,
-		modelViewMatrix: WebGLUniformLocation | null,
-	},
+	attribLocations: Record<'vertexPosition' | 'vertexColor', number>,
+	uniformLocations: Record<'projectionMatrix' | 'modelViewMatrix', WebGLUniformLocation | null>,
 };
 
-type Buffers = Record<'position', WebGLBuffer>
+type Buffers = Record<'position' | 'color', WebGLBuffer>
+
+let then = 0;
+let squareRotation = 0;
 
 function getCanvasElement(query: string | WebGL2RenderingContext): HTMLCanvasElement {
 	if (typeof query === "string") {
 
 		const element = document.querySelector(query);
 
-		if (!(element	instanceof HTMLCanvasElement)) {
+		if (!(element instanceof HTMLCanvasElement)) {
 			throw Error("Failed to get Canvas Element");
 		}
 
 		return element;
 	} else {
 		const element = query.canvas;
-		if (!(element	instanceof HTMLCanvasElement)) {
+		if (!(element instanceof HTMLCanvasElement)) {
 			throw new Error("Not a canvas");
 		};
 		return element;
@@ -99,12 +97,24 @@ function initBuffers(gl: WebGL2RenderingContext) {
 
 	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
+	const colors = [
+		1.0, 1.0, 1.0, 1.0,
+		1.0, 0.0, 0.0, 1.0,
+		0.0, 1.0, 0.0, 1.0,
+		0.0, 0.0, 1.0, 1.0
+	];
+
+	const colorBuffer = createBuffer(gl);
+	gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+
 	return {
 		position: positionBuffer,
+		color: colorBuffer,
 	}
 }
 
-function drawScene(gl: WebGL2RenderingContext, programInfo: ProgramInfo, buffers: Buffers): void {
+function drawScene(gl: WebGL2RenderingContext, programInfo: ProgramInfo, buffers: Buffers, deltaTime: number): void {
 	gl.clearColor(0.0, 0.0, 0.0, 1.0);
 	gl.clearDepth(1.0);
 	gl.enable(gl.DEPTH_TEST);
@@ -112,17 +122,21 @@ function drawScene(gl: WebGL2RenderingContext, programInfo: ProgramInfo, buffers
 
 	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-	const fov = 45 * Math.PI / 180;
-	const canvas = getCanvasElement(gl);
-	const aspect = canvas.clientWidth / canvas.clientHeight;
-	const zNear = 0.1;
-	const zFar = 100.0;
-	const projectionMatrix = mat4.create();
+	const projectionMatrix = (() => {
+		const fov = 45 * Math.PI / 180;
+		const canvas = getCanvasElement(gl);
+		const aspect = canvas.clientWidth / canvas.clientHeight;
+		const zNear = 0.1;
+		const zFar = 100.0;
+		const projectionMatrix = mat4.create();
 
-	mat4.perspective(projectionMatrix, fov, aspect, zNear, zFar);
+		mat4.perspective(projectionMatrix, fov, aspect, zNear, zFar);
+		return projectionMatrix;
+	})()
 
 	const modelViewMatrix = mat4.create();
 	mat4.translate(modelViewMatrix, modelViewMatrix, [-0.0, 0.0, -6.0]);
+	mat4.rotate(modelViewMatrix, modelViewMatrix, squareRotation, [0, 0, 1]);
 
 	{
 		const numComponents = 2;
@@ -136,6 +150,17 @@ function drawScene(gl: WebGL2RenderingContext, programInfo: ProgramInfo, buffers
 		gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
 	}
 
+	{
+		const numComponents = 4;
+		const type = gl.FLOAT;
+		const normalize = false;
+		const stride = 0;
+		const offset = 0;
+		gl.bindBuffer(gl.ARRAY_BUFFER, buffers.color);
+		gl.vertexAttribPointer(programInfo.attribLocations.vertexColor, numComponents, type, normalize, stride, offset);
+		gl.enableVertexAttribArray(programInfo.attribLocations.vertexColor);
+	}
+
 	gl.useProgram(programInfo.program);
 
 	gl.uniformMatrix4fv(programInfo.uniformLocations.projectionMatrix, false, projectionMatrix);
@@ -144,9 +169,12 @@ function drawScene(gl: WebGL2RenderingContext, programInfo: ProgramInfo, buffers
 	{
 		const offset = 0;
 		const vertexCount = 4;
-		gl.drawArrays(gl.TRIANGLE_STRIP, offset,vertexCount);
+		gl.drawArrays(gl.TRIANGLE_STRIP, offset, vertexCount);
 	}
+
+	squareRotation += deltaTime;
 }
+
 
 function init() {
 	const element = getCanvasElement("#webgl-canvas");
@@ -159,9 +187,11 @@ function init() {
 	})()
 
 	const shaderProgram = initShaderProgram(gl);
-	const programInfo: ProgramInfo = { program: shaderProgram,
+	const programInfo: ProgramInfo = {
+		program: shaderProgram,
 		attribLocations: {
 			vertexPosition: gl.getAttribLocation(shaderProgram, "aVertexPosition"),
+			vertexColor: gl.getAttribLocation(shaderProgram, 'aVertexColor'),
 		},
 		uniformLocations: {
 			projectionMatrix: gl.getUniformLocation(shaderProgram, "uProjectionMatrix"),
@@ -170,7 +200,18 @@ function init() {
 	};
 
 	const buffers: Buffers = initBuffers(gl);
-	drawScene(gl, programInfo, buffers);
+
+	function render(now: number) {
+		now *= 0.001;
+		const deltaTime = now - then;
+		then = now;
+
+		drawScene(gl, programInfo, buffers, deltaTime);
+		
+		requestAnimationFrame(render);
+	}
+
+	requestAnimationFrame(render);
 }
 
 window.addEventListener("load", init);
